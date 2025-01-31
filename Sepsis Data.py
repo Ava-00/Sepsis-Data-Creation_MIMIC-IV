@@ -37,68 +37,66 @@ admissions_merged_df = pd.merge(patient_merged_df, admissions_df, on='subject_id
 admissions_merged_df.shape
 
 #Import lab events 
-labevents_path = r"C:\Users\avant\Downloads\labevents.csv.gz"
-labevents_df = pd.read_csv(labevents_path, compression='gzip')
+labevents_path = r"C:\Users\avant\Downloads\labevents (1).csv"
+labevents_df = pd.read_csv(labevents_path)
 labevents_df.head()
 labevents_df.shape
-labevents_merged_df = pd.merge(labevents_df, patient_merged_df, on='subject_id', how='inner')
-labevents_merged_df.shape
 
+d_labitems_path = r"C:\Users\avant\Downloads\physionet.org\files\mimiciv\3.1\hosp\d_labitems.csv.gz"
+d_labitems = pd.read_csv(d_labitems_path, compression='gzip')
+icustays_path = r"C:\Users\avant\Downloads\icustays.csv.gz"
+d_labitems = pd.read_csv(d_labitems_path, compression='gzip')
+icustays = pd.read_csv(icustays_path, compression='gzip')
 
-# #Import additional columns 
-# drg_codes_path = r"C:\Users\avant\Downloads\drgcodes.csv.gz"
-# drg_df = pd.read_csv(drg_codes_path, compression='gzip')
-# drg_df.head()
-# merged_v1_df = pd.merge(drg_df, merged_df, on='subject_id', how='inner')
-# merged_v1_df.shape
-# #visualize this data in a table 
-# merged_v1_df.head()
+# Step 2: Ensure required columns in `d_labitems`
+if "itemid" not in d_labitems.columns or "label" not in d_labitems.columns:
+    raise ValueError("Missing required columns ('itemid' or 'label') in d_labitems!")
 
-# #Import additional columns
-# transfers_path = r"C:\Users\avant\Downloads\transfers.csv.gz"
-# transfers_df = pd.read_csv(transfers_path, compression='gzip')
-# transfers_df.head()
-# merged_v2_df = pd.merge(transfers_df, patient_merged_df, on='subject_id', how='inner')
-# merged_v2_df.shape
-# #visualize this data in a table
-# merged_v2_df.head()
+# Step 3: Create a mapping of item IDs to meaningful column names
+itemid_mapping = {}
+for _, row in d_labitems.iterrows():
+    if isinstance(row["label"], str):  # Ensure the label is a string
+        variable_name = row["label"].lower().replace(" ", "_").replace("-", "_")
+        itemid_mapping[row["itemid"]] = variable_name
 
-# #Import additional columns
-# microbiologyevents_path = r"C:\Users\avant\Downloads\microbiologyevents.csv.gz"
-# microbiologyevents_df = pd.read_csv(microbiologyevents_path, compression='gzip')
-# microbiologyevents_df.head()
-# merged_v3_df = pd.merge(microbiologyevents_df, patient_merged_df, on='subject_id', how='inner')  
-# merged_v3_df.shape
-# #visualize this data in a table 
-# merged_v3_df.head()
-# merged_v3_df.to_csv(r"C:\Users\avant\Downloads\sepsis_data.csv", index=False)
+print("ItemID Mapping Sample:", list(itemid_mapping.items())[:10])  # Debugging: Print first 10 mappings
 
-# #Import additional columns 
-# icustays_path = r"C:\Users\avant\Downloads\icustays.csv.gz"
-# icustays_df = pd.read_csv(icustays_path, compression='gzip')
-# icustays_df.head()
-# merged_v4_df = pd.merge(icustays_df, patient_merged_df, on='subject_id', how='inner')
-# merged_v4_df.shape
-# #visualize this data in a table
-# merged_v4_df.head()
-# merged_v4_df.to_csv(r"C:\Users\avant\Downloads\sepsis_data_icu.csv", index=False)
+#Setting date-time effects
+labevents_df["charttime"] = pd.to_datetime(labevents_df["charttime"])
+icustays["intime"] = pd.to_datetime(icustays["intime"])
+icustays["outtime"] = pd.to_datetime(icustays["outtime"])
 
-# #Import additional columns
-# emar_path = r"C:\Users\avant\Downloads\emar.csv.gz"
-# emar_df = pd.read_csv(emar_path, compression='gzip')
-# emar_df.head()
-# merged_v5_df = pd.merge(emar_df, patient_merged_df, on='subject_id', how='inner')
-# merged_v5_df.shape
-# #visualize this data in a table
-# merged_v5_df.head()
-# merged_v5_df.to_csv(r"C:\Users\avant\Downloads\sepsis_data_emar.csv", index=False)
+# Merge labevents with admissions and ICU stays
+labevents_patients = pd.merge(labevents_df,admissions_merged_df, on="subject_id")
+labevents_filtered = pd.merge(labevents_patients,icustays, on="subject_id")
+labevents_filtered.shape
 
-# #Import additional columns
-# proceddureevents_path = r"C:\Users\avant\Downloads\procedureevents.csv.gz"
-# proceddureevents_df = pd.read_csv(proceddureevents_path, compression='gzip')
-# proceddureevents_df.head()
-# merged_v6_df = pd.merge(proceddureevents_df, patient_merged_df, on='subject_id', how='inner')
-# merged_v6_df.shape  
-# #visualize this data in a table
-# merged_v6_df.head()
-# merged_v6_df.to_csv(r"C:\Users\avant\Downloads\sepsis_data_procedure.csv", index=False)
+# Filter based on time range
+labevents_filtered = labevents_filtered[
+    (labevents_filtered["charttime"] >= labevents_filtered["intime"]) & 
+    (labevents_filtered["charttime"] <= labevents_filtered["outtime"])
+]
+
+# Step 5: Aggregation of lab results (e.g., using max and min for each `hadm_id`)
+aggregated = labevents_filtered.pivot_table(
+    index="hadm_id",
+    columns="itemid",
+    values="valuenum",
+    aggfunc={"valuenum": [np.max, np.min]}
+)
+
+# Step 6: Flatten MultiIndex columns for easier access
+flattened_columns = ['_'.join(map(str, col)).strip() for col in aggregated.columns]
+aggregated.columns = flattened_columns
+
+# Step 7: Replace item IDs with meaningful column names
+aggregated.columns = [
+    itemid_mapping.get(int(col.split('_')[1]), col) if col.split('_')[1].isdigit() else col
+    for col in flattened_columns
+]
+
+# Step 8: Reset index (if needed)
+aggregated.reset_index(inplace=True)
+
+# Debugging: Output the final DataFrame
+print("\nAggregated DataFrame with Renamed Columns:\n", aggregated.head())
